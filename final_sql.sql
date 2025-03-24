@@ -256,3 +256,42 @@ BEGIN
         WHERE i.Status = 'CANCELED';
     END
 END;
+
+go
+CREATE TYPE OrderDetailsType AS TABLE (
+    JewelryID INT,
+    Quantity INT,
+    UnitPrice DECIMAL(18,2)
+);
+
+go
+CREATE PROCEDURE AddOrder
+    @CustomerID INT,
+    @PaymentMethod NVARCHAR(50),
+    @OrderDetails OrderDetailsType READONLY
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @NewOrderID INT;
+
+    -- Bước 1: Tạo đơn hàng mới
+    INSERT INTO Orders (CustomerID, OrderDate, PaymentMethod, TotalAmount, Status)
+    VALUES (@CustomerID, GETDATE(), @PaymentMethod, 0, 'PENDING');
+
+    -- Lấy OrderID vừa tạo
+    SET @NewOrderID = SCOPE_IDENTITY();
+
+    -- Bước 2: Chèn tất cả sản phẩm vào OrderDetails một lần
+    INSERT INTO OrderDetails (OrderID, JewelryID, Quantity, UnitPrice)
+    SELECT @NewOrderID, JewelryID, Quantity, UnitPrice
+    FROM @OrderDetails;
+
+    -- Bước 3: Cập nhật tổng tiền đơn hàng
+    UPDATE Orders
+    SET TotalAmount = (SELECT SUM(Quantity * UnitPrice) FROM OrderDetails WHERE OrderID = @NewOrderID)
+    WHERE OrderID = @NewOrderID;
+
+    -- Trả về OrderID mới
+    SELECT @NewOrderID AS NewOrderID;
+END;
