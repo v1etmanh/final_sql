@@ -1,2 +1,2 @@
-# final_sql
-manh sự lực kiệt
+JEWELRY MANAGEMENT - DBI ASSIGNMENT
+mem : Mạnh, Lực, Sự, Kiệt
