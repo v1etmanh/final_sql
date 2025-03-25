@@ -12,7 +12,7 @@ CREATE TABLE Supplier (
 -- tạo 1 bảng địa chỉ để tối ưu hóa địa chỉ  1 cách kiểu rõ hơn á :)) 
 CREATE TABLE Supplier_Address (
     AddressID INT IDENTITY(1,1) PRIMARY KEY,
-    SupplierID INT NOT NULL,
+    SupplierID INT NOT NULL unique,
     Street VARCHAR(255) NOT NULL,
     City VARCHAR(100) NOT NULL,
     State VARCHAR(100) NULL,
@@ -26,6 +26,7 @@ CREATE TABLE Supplier_Address (
 CREATE TABLE Category (
     CategoryID INT PRIMARY KEY identity(1,1),
     CategoryName NVARCHAR(50) NOT NULL unique -- tôi nghĩ thành phần của trang sức là duy nhất á'
+
 );
 
 -- Create Jewelry Table
@@ -69,7 +70,7 @@ CREATE TABLE Warranty  (
     StartDate DATE not null,
     EndDate DATE not null,
 	constraint chk_warranty_date  CHECK (EndDate >= StartDate),-- thêm vào để check ngày kết thúc và ngày bắt đầu 
-    Status NCHAR(20) CHECK(Status IN ('PENDING', 'ACTIVE', 'EXPIRED')),
+    Status NCHAR(20) CHECK(Status IN ( 'ACTIVE', 'EXPIRED')),
     FOREIGN KEY (JewelryID) REFERENCES Jewelry(JewelryID),
 	FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID)
 );
@@ -123,209 +124,4 @@ CREATE TABLE JewelryPriceHistory (
     NewPrice DECIMAL(18,2) NOT NULL,        -- Giá mới
     ChangeDate DATETIME DEFAULT GETDATE(),  -- Ngày thay đổi giá ok
     FOREIGN KEY (JewelryID) REFERENCES Jewelry(JewelryID) ON DELETE CASCADE
-);
--- điều này sẽ được hoàn thiện bởi hàm update ngay khi ta thay đổi giá của sp thời nó sẽ tự động lưu vào :))
--- tạo index 
--- giải thích sơ qua vì sao index lại làm tăng tốc độ truy vấn nhé :: vì nó sẽ tổ chức các địa chỉ theo binary search tree nên log(n)
--- các thuộc tính có thể dc tìm kiếm thường xuyên && và tìm kiếm đk thỏa mãn khi thực hiện join
---1 tạo các index cho việc truy vấn các bảng thường xuyên join
-
-CREATE INDEX idx_Jewelry_Category ON Jewelry (CategoryID);
-CREATE INDEX idx_Jewelry_Supplier ON Jewelry (SupplierID);
-
-CREATE INDEX idx_Orders_Customer ON Orders (CustomerID);
-CREATE INDEX idx_Orders_Employee ON Orders (EmployeeID);
-
-CREATE INDEX idx_OrderDetails_Order ON OrderDetails (OrderID);
-CREATE INDEX idx_OrderDetails_Jewelry ON OrderDetails (JewelryID);
-
-CREATE INDEX idx_Warranty_Jewelry ON Warranty (JewelryID);
-CREATE INDEX idx_Warranty_Customer ON Warranty (CustomerID);
-
-CREATE INDEX idx_Service_Customer ON Service (CustomerID);
-CREATE INDEX idx_Service_Employee ON Service (EmployeeID);
-
-CREATE INDEX idx_SupplierAddress_Supplier ON Supplier_Address (SupplierID);
--- thứ 2 là các thuộc tính thường hay dùng để tìm kiếm 
-CREATE INDEX idx_Customer_Phone ON Customer (PhoneNumber);
-CREATE INDEX idx_Customer_TaxCode ON Customer (TaxCode);
-
-CREATE INDEX idx_Supplier_Email ON Supplier (Email);
-CREATE INDEX idx_Supplier_Phone ON Supplier (Phone_Number);
-
-CREATE INDEX idx_Jewelry_Name ON Jewelry (Name);
-CREATE INDEX idx_Employee_Name ON Employee (EmployeeName);
---giá trị của 1 bảng lịch sử thường thay đổi nên ta cx nên tạo index để tìm nhanh lịch sử 
-CREATE INDEX idx_JewelryPriceHistory_Jewelry ON JewelryPriceHistory (JewelryID);
-CREATE INDEX idx_JewelryPriceHistory_ChangeDate ON JewelryPriceHistory (ChangeDate);
--- ta cx mún đôi khi tìm kiếm dữ liệu theo ngày kiểu như hôm qua ai mua hàng hè 
-CREATE INDEX idx_Orders_OrderDate ON Orders (OrderDate);
--- ta cx có thể mún tìm kiêm xem thử các đơn  bảo hành  hàng nào còn hiệu lực ::0 đơn hàng nảo bị hủy.,...
-CREATE INDEX idx_Orders_Status ON Orders (Status);
-CREATE INDEX idx_Warranty_Status ON Warranty (Status);
--- thêm các trigger  
---1 sau khi update thì dữ liệu sẽ được lưu vào ngay bảng history nếu có sự thay đổi giá 
-go
-CREATE TRIGGER trg_Jewelry_Price_Update
-ON Jewelry
-AFTER UPDATE
-AS
-BEGIN
-    IF UPDATE(Price)
-    BEGIN
-        INSERT INTO JewelryPriceHistory (JewelryID, OldPrice, NewPrice, ChangeDate)
-        SELECT d.JewelryID, d.Price, i.Price, GETDATE()
-        FROM deleted d
-        JOIN inserted i ON d.JewelryID = i.JewelryID
-        WHERE d.Price <> i.Price;
-    END
-END;
---trigger khi order mà có sl vuwotj quá sl sp 
-go
-CREATE TRIGGER trg_Check_Stock_Before_Order
-ON OrderDetails
-AFTER INSERT
-AS
-BEGIN
-    IF EXISTS (
-        SELECT 1 
-        FROM inserted i
-        JOIN Jewelry j ON i.JewelryID = j.JewelryID
-        WHERE i.Quantity > j.StockQuantity
-    )
-    BEGIN
-        RAISERROR ('Số lượng đặt hàng vượt quá số lượng trong kho!', 16, 1);
-        ROLLBACK TRANSACTION;
-    END
-END;
-
---tự động giảm số lượng hàng trong kho sau khi đặt hàng 
-go
-CREATE TRIGGER trg_Update_Stock_After_Order
-ON OrderDetails
-AFTER INSERT
-AS
-BEGIN
-    UPDATE j
-    SET j.StockQuantity = j.StockQuantity - i.Quantity
-    FROM Jewelry j
-    JOIN inserted i ON j.JewelryID = i.JewelryID;
-END;
-
---tự động cập nhật sau khi hết bảo hành
-go
-CREATE TRIGGER trg_Auto_Update_Warranty_Status
-ON Warranty
-AFTER INSERT, UPDATE
-AS
-BEGIN
-    UPDATE Warranty
-    SET Status = 'EXPIRED'
-    WHERE EndDate < GETDATE() AND Status <> 'EXPIRED';
-END;
---đảm bảo ngày bảo hành hợp lí 
-go
-CREATE TRIGGER trg_Validate_Warranty_Dates ON Warranty
-Instead of INSERT, UPDATE
-AS
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM inserted WHERE StartDate > EndDate
-    )
-    BEGIN
-        RAISERROR ('Ngày bắt đầu bảo hành không thể lớn hơn ngày kết thúc!', 16, 1);
-        ROLLBACK TRANSACTION;
-    END
-END;
--- nếu hàng bị hủy thì sao -:> thì số luwongjh hàng sẽ dc hoàn vì sp sẽ dc trả về
-go
-CREATE TRIGGER trg_Restore_Stock_After_Cancel
-ON Orders
-AFTER UPDATE
-AS
-BEGIN
-    IF UPDATE(Status) AND EXISTS (
-        SELECT 1 FROM inserted WHERE Status = 'CANCELED'
-    )
-    BEGIN
-        UPDATE j
-        SET j.StockQuantity = j.StockQuantity + od.Quantity
-        FROM Jewelry j
-        JOIN OrderDetails od ON j.JewelryID = od.JewelryID
-        JOIN inserted i ON od.OrderID = i.OrderID
-        WHERE i.Status = 'CANCELED';
-    END
-END;
-
-go
-CREATE TYPE OrderDetailsType AS TABLE (
-    JewelryID INT,
-    Quantity INT,
-    UnitPrice DECIMAL(18,2)
-);
-
-go
-CREATE PROCEDURE AddOrder
-    @CustomerID INT,
-    @PaymentMethod NVARCHAR(50),
-    @OrderDetails OrderDetailsType READONLY
-AS
-BEGIN
-    SET NOCOUNT ON;
-
-    DECLARE @NewOrderID INT;
-
-    -- Bước 1: Tạo đơn hàng mới
-    INSERT INTO Orders (CustomerID, OrderDate, PaymentMethod, TotalAmount, Status)
-    VALUES (@CustomerID, GETDATE(), @PaymentMethod, 0, 'PENDING');
-
-    -- Lấy OrderID vừa tạo
-    SET @NewOrderID = SCOPE_IDENTITY();
-
-    -- Bước 2: Chèn tất cả sản phẩm vào OrderDetails một lần
-    INSERT INTO OrderDetails (OrderID, JewelryID, Quantity, UnitPrice)
-    SELECT @NewOrderID, JewelryID, Quantity, UnitPrice
-    FROM @OrderDetails;
-
-    -- Bước 3: Cập nhật tổng tiền đơn hàng
-    UPDATE Orders
-    SET TotalAmount = (SELECT SUM(Quantity * UnitPrice) FROM OrderDetails WHERE OrderID = @NewOrderID)
-    WHERE OrderID = @NewOrderID;
-
-    -- Trả về OrderID mới
-    SELECT @NewOrderID AS NewOrderID;
-END;
-
--- VIEW 1: Xem lịch sử giao dịch của khách hàng
-CREATE VIEW CustomerTransactionHistory AS
-SELECT C.CustomerID, C.FullName, O.OrderID, O.OrderDate, O.TotalAmount, O.Status, O.PaymentMethod
-FROM Customer C
-JOIN Orders O ON C.CustomerID = O.CustomerID;
-
-select * from CustomerTransactionHistory
-
--- VIEW 2: Xem lịch sử thay đổi giá sản phẩm
-CREATE VIEW JewelryPriceChangeHistory AS
-SELECT J.JewelryID, J.Name AS JewelryName, PH.OldPrice, PH.NewPrice, PH.ChangeDate
-FROM Jewelry J
-JOIN JewelryPriceHistory PH ON J.JewelryID = PH.JewelryID;
-
--- VIEW 3: Danh sách đơn hàng và chi tiết đơn hàng
-CREATE VIEW OrderWithDetails AS
-SELECT O.OrderID, O.OrderDate, O.TotalAmount, O.Status, OD.JewelryID, J.Name AS JewelryName, OD.Quantity, OD.UnitPrice
-FROM Orders O
-JOIN OrderDetails OD ON O.OrderID = OD.OrderID
-JOIN Jewelry J ON OD.JewelryID = J.JewelryID;
-
--- VIEW 4: Thông tin bảo hành và trạng thái bảo hành
-CREATE VIEW WarrantyStatus AS
-SELECT W.WarrantyID, C.FullName AS CustomerName, J.Name AS JewelryName, W.StartDate, W.EndDate, W.Status
-FROM Warranty W
-JOIN Customer C ON W.CustomerID = C.CustomerID
-JOIN Jewelry J ON W.JewelryID = J.JewelryID;
-
--- VIEW 5: Danh sách sản phẩm trong kho kèm số lượng và nhà cung cấp
-CREATE VIEW InventoryWithSupplier AS
-SELECT J.JewelryID, J.Name AS JewelryName, J.StockQuantity, J.Price, S.SupplierName, S.Email, S.Phone_Number
-FROM Jewelry J
-JOIN Supplier S ON J.SupplierID = S.SupplierID;
+);--á 
